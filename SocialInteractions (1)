@@ -1,0 +1,1378 @@
+import { useEffect, useState, type ChangeEvent } from "react";
+import React from "react";
+import { Link } from "wouter";
+
+type PlaylistTheme = "briar" | "midnight" | "holographic" | "ice" | "custom";
+type PlaylistStyleDraft = { playlistId: number; title: string; thumbnailUrl: string | null; theme: PlaylistTheme; accentColor: string; surfaceColor: string };
+
+function ManagedProfileJukebox({
+  target,
+  viewer,
+}: {
+  target: BriarMember;
+  viewer: BriarMember | null;
+}) {
+  const lists = trpc.jukebox.list.useQuery(
+    { username: target.username || "briar" },
+    { enabled: Boolean(target.username) }
+  );
+  const utils = trpc.useUtils();
+  const [playlistTitle, setPlaylistTitle] = useState("");
+  const [track, setTrack] = useState({
+    playlistId: 0,
+    youtubeUrl: "",
+    title: "",
+  });
+  const [active, setActive] = useState<{
+    title: string;
+    youtubeUrl: string;
+  } | null>(null);
+  const [editing, setEditing] = useState<{
+    id: number;
+    title: string;
+    youtubeUrl: string;
+  } | null>(null);
+  const [customizing, setCustomizing] = useState<PlaylistStyleDraft | null>(null);
+  const thumbnailUpload = trpc.media.createUploadUrl.useMutation();
+  const create = trpc.jukebox.create.useMutation({
+    onSuccess: () => {
+      setPlaylistTitle("");
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Playlist criada na sua jukebox.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const add = trpc.jukebox.addTrack.useMutation({
+    onSuccess: () => {
+      setTrack({ playlistId: 0, youtubeUrl: "", title: "" });
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Faixa adicionada à jukebox.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const updateTrack = trpc.jukebox.updateTrack.useMutation({
+    onSuccess: () => {
+      setEditing(null);
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Faixa atualizada.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const removeTrack = trpc.jukebox.removeTrack.useMutation({
+    onSuccess: () => {
+      setActive(null);
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Faixa removida da jukebox.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const updatePlaylist = trpc.jukebox.update.useMutation({
+    onSuccess: () => {
+      setCustomizing(null);
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Visual da playlist atualizado.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const removePlaylist = trpc.jukebox.remove.useMutation({
+    onSuccess: () => {
+      setCustomizing(null);
+      setActive(null);
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Playlist removida da jukebox.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const connection = trpc.connections.status.useQuery(
+    { username: target.username || "briar" },
+    { enabled: Boolean(viewer && target.username && viewer.id !== target.id) }
+  );
+  const canAdd =
+    viewer?.id === target.id || connection.data?.status === "accepted";
+  const first = lists.data?.[0];
+  const embed = active?.youtubeUrl.match(
+    /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{11})/
+  )?.[1];
+  const themeStyle = (list: { theme: PlaylistTheme; accentColor: string; surfaceColor: string; thumbnailUrl: string | null }) => {
+    const presets: Record<Exclude<PlaylistTheme, "custom">, { accent: string; surface: string }> = { briar: { accent: "#00f0ff", surface: "#190038" }, midnight: { accent: "#9d00ff", surface: "#090014" }, holographic: { accent: "#ff5fd2", surface: "#162358" }, ice: { accent: "#9bf7ff", surface: "#06324b" } };
+    const palette = list.theme === "custom" ? { accent: list.accentColor, surface: list.surfaceColor } : presets[list.theme];
+    return { borderColor: palette.accent, backgroundColor: palette.surface, backgroundImage: list.thumbnailUrl ? `linear-gradient(90deg, ${palette.surface}ed, ${palette.surface}b8), url(${list.thumbnailUrl})` : undefined, backgroundSize: "cover", backgroundPosition: "center", boxShadow: `0 0 18px ${palette.accent}33` };
+  };
+  const chooseTheme = (theme: PlaylistTheme) => setCustomizing(current => {
+    if (!current) return current;
+    const presets: Record<Exclude<PlaylistTheme, "custom">, { accentColor: string; surfaceColor: string }> = { briar: { accentColor: "#00f0ff", surfaceColor: "#190038" }, midnight: { accentColor: "#9d00ff", surfaceColor: "#090014" }, holographic: { accentColor: "#ff5fd2", surfaceColor: "#162358" }, ice: { accentColor: "#9bf7ff", surfaceColor: "#06324b" } };
+    return theme === "custom" ? { ...current, theme } : { ...current, theme, ...presets[theme] };
+  });
+  const sendThumbnail = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !customizing) return;
+    try {
+      const uploaded = await uploadBriarMedia(file, "jukebox-thumbnail", thumbnailUpload.mutateAsync);
+      setCustomizing(current => current ? { ...current, thumbnailUrl: uploaded.url } : current);
+      toast.success("Miniatura pronta para salvar.");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível enviar a miniatura."); }
+    finally { event.target.value = ""; }
+  };
+  return (
+    <section className="neon-card corner-cut relative mt-7 p-5">
+      <p className="display-y2k text-2xl text-fuchsia-200">JUKEBOX BRIAR</p>
+      <p className="mt-1 text-xs text-slate-300">
+        Playlists curtas do perfil. Conexões podem adicionar uma faixa por link
+        do YouTube.
+      </p>
+      {active && (
+        <div className="relative mt-4 overflow-hidden border border-cyan-200/60 bg-black shadow-[0_0_20px_rgba(0,240,255,.2)]">
+          <div className="flex items-center justify-between gap-3 border-b border-cyan-200/20 px-3 py-2">
+            <p className="truncate text-xs font-bold uppercase text-cyan-100">
+              ▶ {active.title}
+            </p>
+            <button
+              type="button"
+              onClick={() => setActive(null)}
+              className="text-xs font-bold text-fuchsia-200"
+            >
+              FECHAR
+            </button>
+          </div>
+          {embed ? (
+            <iframe
+              className="aspect-video w-full"
+              src={`https://www.youtube-nocookie.com/embed/${embed}?autoplay=1`}
+              title={`Player: ${active.title}`}
+              allow="autoplay; encrypted-media; picture-in-picture"
+              allowFullScreen
+            />
+          ) : (
+            <p className="p-4 text-xs text-fuchsia-200">
+              Este link não pôde ser reproduzido aqui.
+            </p>
+          )}
+        </div>
+      )}
+      {viewer?.id === target.id && (
+        <form
+          onSubmit={event => {
+            event.preventDefault();
+            if (playlistTitle.trim()) create.mutate({ title: playlistTitle });
+          }}
+          className="mt-4 flex gap-2"
+        >
+          <input
+            value={playlistTitle}
+            onChange={event => setPlaylistTitle(event.target.value)}
+            className="y2k-input py-2 text-sm"
+            maxLength={60}
+            placeholder="Nome da playlist"
+          />
+          <button className="neon-button px-3 text-xs font-bold">CRIAR</button>
+        </form>
+      )}
+      {lists.data?.map(list => (
+        <div
+          key={list.id}
+          className="mt-4 border bg-black/20 p-3"
+          style={themeStyle(list)}
+        >
+          <div className="flex items-center justify-between gap-3"><div className="flex min-w-0 items-center gap-2">{list.thumbnailUrl ? <img src={list.thumbnailUrl} alt="" className="h-9 w-9 rounded border border-white/30 object-cover" /> : <span className="grid h-9 w-9 place-items-center rounded border border-white/25 bg-black/20 text-sm">♫</span>}<p className="truncate text-xs font-extrabold uppercase text-cyan-100">{list.title}</p></div>{viewer?.id === target.id && <span className="flex shrink-0 gap-2 text-[10px] font-bold uppercase"><button type="button" onClick={() => setCustomizing({ playlistId: list.id, title: list.title, thumbnailUrl: list.thumbnailUrl, theme: list.theme as PlaylistTheme, accentColor: list.accentColor, surfaceColor: list.surfaceColor })} className="text-fuchsia-100">Personalizar</button><button type="button" disabled={removePlaylist.isPending} onClick={() => { if (window.confirm(`Remover a playlist "${list.title}" e todas as suas faixas? Essa ação não pode ser desfeita.`)) removePlaylist.mutate({ playlistId: list.id }); }} className="text-red-300 disabled:opacity-50">Remover</button></span>}</div>
+          {customizing?.playlistId === list.id && <div className="mt-3 grid gap-2 border-t border-white/20 pt-3"><label className="text-[10px] font-bold uppercase text-cyan-100">Título<input value={customizing.title} onChange={event => setCustomizing(current => current ? { ...current, title: event.target.value } : current)} className="y2k-input mt-1 py-2 text-xs" maxLength={60} /></label><label className="text-[10px] font-bold uppercase text-cyan-100">Tema<select value={customizing.theme} onChange={event => chooseTheme(event.target.value as PlaylistTheme)} className="y2k-input mt-1 py-2 text-xs"><option value="briar">Briar neon</option><option value="midnight">Midnight</option><option value="holographic">Holográfico</option><option value="ice">Gelo</option><option value="custom">Cores livres</option></select></label><div className="grid grid-cols-2 gap-2"><label className="text-[10px] font-bold uppercase text-cyan-100">Destaque<input type="color" value={customizing.accentColor} onChange={event => setCustomizing(current => current ? { ...current, accentColor: event.target.value, theme: "custom" } : current)} className="mt-1 h-9 w-full" /></label><label className="text-[10px] font-bold uppercase text-cyan-100">Fundo<input type="color" value={customizing.surfaceColor} onChange={event => setCustomizing(current => current ? { ...current, surfaceColor: event.target.value, theme: "custom" } : current)} className="mt-1 h-9 w-full" /></label></div><label className="cursor-pointer border border-dashed border-cyan-200/50 px-3 py-2 text-[10px] font-bold uppercase text-cyan-100">{thumbnailUpload.isPending ? "Enviando miniatura..." : "Enviar miniatura de imagem"}<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" className="hidden" disabled={thumbnailUpload.isPending} onChange={sendThumbnail} /></label>{customizing.thumbnailUrl && <div className="flex items-center justify-between gap-2"><img src={customizing.thumbnailUrl} alt="Prévia da miniatura" className="h-12 w-12 border border-cyan-200 object-cover" /><button type="button" onClick={() => setCustomizing(current => current ? { ...current, thumbnailUrl: null } : current)} className="text-[10px] font-bold uppercase text-fuchsia-100">Remover miniatura</button></div>}<div className="flex gap-3"><button type="button" onClick={() => updatePlaylist.mutate(customizing)} disabled={updatePlaylist.isPending || !customizing.title.trim()} className="neon-button px-3 py-2 text-[10px] font-bold uppercase">Salvar visual</button><button type="button" onClick={() => setCustomizing(null)} className="text-[10px] font-bold uppercase text-slate-300">Cancelar</button></div></div>}
+          {list.tracks.length ? (
+            <div className="mt-2 space-y-2">
+              {list.tracks.slice(0, 8).map(trackItem => {
+                const canManage =
+                  viewer?.id === target.id ||
+                  viewer?.id === trackItem.addedById;
+                const isEditing = editing?.id === trackItem.id;
+                return (
+                  <div
+                    key={trackItem.id}
+                    className="border-l-2 border-fuchsia-300 px-2 py-2"
+                  >
+                    {isEditing ? (
+                      <div className="grid gap-2">
+                        <input
+                          value={editing.title}
+                          onChange={event =>
+                            setEditing({
+                              ...editing,
+                              title: event.target.value,
+                            })
+                          }
+                          className="y2k-input py-1 text-xs"
+                          maxLength={120}
+                          aria-label="Editar título da faixa"
+                        />
+                        <input
+                          value={editing.youtubeUrl}
+                          onChange={event =>
+                            setEditing({
+                              ...editing,
+                              youtubeUrl: event.target.value,
+                            })
+                          }
+                          className="y2k-input py-1 text-xs"
+                          aria-label="Editar link da faixa"
+                        />
+                        <div className="flex gap-3 text-[10px] font-bold uppercase">
+                          <button
+                            type="button"
+                            onClick={() => updateTrack.mutate(editing)}
+                            className="text-cyan-100"
+                          >
+                            Salvar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditing(null)}
+                            className="text-slate-300"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setActive({
+                              title: trackItem.title,
+                              youtubeUrl: trackItem.youtubeUrl,
+                            })
+                          }
+                          className="min-w-0 flex-1 truncate text-left text-xs text-slate-100 hover:text-cyan-100"
+                        >
+                          ▶ {trackItem.title}{" "}
+                          <span className="text-slate-400">
+                            · {trackItem.addedBy.name || "conexão"}
+                          </span>
+                        </button>
+                        {canManage && (
+                          <span className="flex shrink-0 gap-2 text-[10px] font-bold uppercase">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditing({
+                                  id: trackItem.id,
+                                  title: trackItem.title,
+                                  youtubeUrl: trackItem.youtubeUrl,
+                                })
+                              }
+                              className="text-cyan-100"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                removeTrack.mutate({ trackId: trackItem.id })
+                              }
+                              className="text-fuchsia-200"
+                            >
+                              Remover
+                            </button>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-400">
+              A playlist ainda não tem faixas.
+            </p>
+          )}
+        </div>
+      ))}
+      {canAdd && first && (
+        <form
+          onSubmit={event => {
+            event.preventDefault();
+            if (track.youtubeUrl && track.title)
+              add.mutate({
+                playlistId: track.playlistId || first.id,
+                youtubeUrl: track.youtubeUrl,
+                title: track.title,
+              });
+          }}
+          className="mt-4 space-y-2 border-t border-cyan-300/20 pt-3"
+        >
+          <select
+            value={track.playlistId || first.id}
+            onChange={event =>
+              setTrack(previous => ({
+                ...previous,
+                playlistId: Number(event.target.value),
+              }))
+            }
+            className="y2k-input py-2 text-xs"
+          >
+            {lists.data?.map(list => (
+              <option key={list.id} value={list.id}>
+                {list.title}
+              </option>
+            ))}
+          </select>
+          <input
+            value={track.title}
+            onChange={event =>
+              setTrack(previous => ({ ...previous, title: event.target.value }))
+            }
+            className="y2k-input py-2 text-sm"
+            maxLength={120}
+            placeholder="Título da música"
+          />
+          <input
+            value={track.youtubeUrl}
+            onChange={event =>
+              setTrack(previous => ({
+                ...previous,
+                youtubeUrl: event.target.value,
+              }))
+            }
+            className="y2k-input py-2 text-sm"
+            type="url"
+            placeholder="Link do YouTube"
+          />
+          <button
+            disabled={add.isPending}
+            className="violet-button px-3 py-2 text-xs font-bold uppercase"
+          >
+            Adicionar à jukebox
+          </button>
+        </form>
+      )}
+      {viewer && !canAdd && first && (
+        <p className="mt-4 text-xs text-fuchsia-200">
+          Conecte-se a este perfil para sugerir músicas.
+        </p>
+      )}
+      {!lists.data?.length && viewer?.id !== target.id && (
+        <p className="mt-4 text-xs text-slate-400">
+          Este perfil ainda não criou uma playlist.
+        </p>
+      )}
+    </section>
+  );
+}
+// @ts-expect-error substitui a implementação exportada pela versão com player e gestão de faixas.
+ProfileJukebox = ManagedProfileJukebox;
+import {
+  BellRing,
+  CirclePlus,
+  EyeOff,
+  ImagePlus,
+  Mail,
+  Send,
+  Sparkles,
+  X,
+  Zap,
+} from "lucide-react";
+import { toast } from "sonner";
+import { trpc } from "@/lib/trpc";
+import { uploadBriarMedia } from "@/lib/directMediaUpload";
+import { MemberAvatar, PresenceDot, type BriarMember } from "./BriarUi";
+import { LevelUpCelebration } from "./LevelUpCelebration";
+
+type IdentityMode = "member" | "persona" | "anonymous";
+
+export function NotificationOverlay() {
+  const { data: member } = trpc.auth.me.useQuery();
+  const utils = trpc.useUtils();
+  const notices = trpc.notifications.unread.useQuery(undefined, {
+    enabled: Boolean(member),
+    refetchInterval: member ? 10_000 : false,
+    refetchIntervalInBackground: false,
+  });
+  const dismiss = trpc.notifications.dismiss.useMutation({
+    onSuccess: () => {
+      utils.notifications.unread.invalidate();
+      utils.notifications.list.invalidate();
+    },
+  });
+  const pokeBack = trpc.notifications.poke.useMutation({
+    onSuccess: () => {
+      toast.success("Cutucada retribuída!");
+      utils.notifications.unread.invalidate();
+    },
+  });
+  const notice = notices.data?.[0];
+  if (!member || !notice) return null;
+  const sender =
+    notice.isAnonymous === "yes"
+      ? "ANÔNIMO"
+      : notice.sender?.name || "ALGUÉM DO CAMPUS";
+  const close = () => dismiss.mutate({ notificationId: notice.id });
+  if (notice.levelUpLevel !== null) return <LevelUpCelebration level={notice.levelUpLevel} onClose={close} />;
+  const isLevelUp = false;
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[70] grid place-items-center bg-[#070012]/25 p-4">
+      <section className={`${isLevelUp ? "level-up-pop" : "msn-shake"} pointer-events-auto relative w-full max-w-md overflow-hidden border-2 border-cyan-200 bg-[#17002f] p-1 shadow-[0_0_34px_rgba(0,240,255,.65)]`}>
+        <div className="flex items-center justify-between bg-gradient-to-r from-cyan-300 via-fuchsia-500 to-violet-700 px-3 py-2 text-xs font-extrabold uppercase text-[#10021f]">
+          <span>{isLevelUp ? "Briar Level Up // 2000" : "Briar Messenger 2000"}</span>
+          <button onClick={close} aria-label="Fechar aviso">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="p-5">
+          <p className="display-y2k text-2xl text-cyan-100">
+            {isLevelUp
+              ? "✦ NÍVEL ALCANÇADO!"
+              : notice.type === "poke"
+              ? "⚡ VOCÊ FOI CUTUCADA!"
+              : "✉ NOVO RECADO"}
+          </p>
+          {!isLevelUp && <p className="mt-3 text-sm font-bold text-fuchsia-200">{sender}</p>}
+          {isLevelUp && <p className="mt-3 display-y2k text-6xl leading-none text-fuchsia-200 text-glow">Lv. {notice.levelUpLevel}</p>}
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-100">
+            {isLevelUp
+              ? "Seu brilho no campus aumentou. Continue publicando e recebendo cutucadas para alcançar o próximo marco!"
+              : notice.type === "poke"
+              ? `@${notice.sender?.username || "membro"} cutucou você. Que tal retribuir?`
+              : notice.body}
+          </p>
+          <div className="mt-5 flex justify-end gap-2">
+            {!isLevelUp && notice.type === "poke" && notice.sender?.username && (
+              <button
+                onClick={() => {
+                  pokeBack.mutate({ username: notice.sender!.username! });
+                  close();
+                }}
+                className="violet-button px-3 py-2 text-xs font-extrabold uppercase"
+              >
+                <Zap size={14} />
+                Cutucar de volta
+              </button>
+            )}
+            <button
+              onClick={close}
+              className="neon-button corner-cut px-5 py-2 text-xs font-extrabold uppercase"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export function GalleryMediaViewer() {
+  const [active, setActive] = useState<{
+    src: string;
+    kind: "image" | "video";
+    alt: string;
+    href: string;
+  } | null>(null);
+  const [minimized, setMinimized] = useState(false);
+  useEffect(() => {
+    const open = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const link = target?.closest('a[href^="/post/"]');
+      const media = link?.querySelector("img,video") as
+        | HTMLImageElement
+        | HTMLVideoElement
+        | null;
+      const href = link?.getAttribute("href");
+      if (!link || !media || !href || !link.closest('[role="tabpanel"]'))
+        return;
+      event.preventDefault();
+      setMinimized(false);
+      setActive({
+        src: media.currentSrc || media.src,
+        kind: media.tagName === "VIDEO" ? "video" : "image",
+        alt: media.getAttribute("alt") || "Mídia do perfil",
+        href,
+      });
+    };
+    document.addEventListener("click", open, true);
+    return () => document.removeEventListener("click", open, true);
+  }, []);
+  if (!active) return null;
+  if (minimized)
+    return (
+      <div className="fixed bottom-5 right-5 z-[85] flex overflow-hidden border border-cyan-200 bg-[#190038] text-xs font-extrabold uppercase shadow-[0_0_24px_rgba(0,240,255,.5)]">
+        <button
+          type="button"
+          onClick={() => setMinimized(false)}
+          className="px-4 py-3 text-cyan-100"
+        >
+          ▣ Imagem minimizada
+        </button>
+        <Link
+          href={active.href}
+          onClick={() => setActive(null)}
+          className="border-l border-cyan-300/30 px-4 py-3 text-fuchsia-100"
+        >
+          Abrir post
+        </Link>
+      </div>
+    );
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Visualizador de mídia"
+      className="fixed inset-0 z-[85] grid place-items-center bg-[#070012]/90 p-4 backdrop-blur-sm"
+      onClick={() => setActive(null)}
+    >
+      <section
+        className="neon-card corner-cut relative w-full max-w-5xl overflow-hidden p-2"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="absolute right-4 top-4 z-10 flex gap-2">
+          <Link
+            href={active.href}
+            onClick={() => setActive(null)}
+            className="border border-fuchsia-300 bg-[#120225]/90 px-3 py-1 text-xs font-extrabold text-fuchsia-100"
+          >
+            ABRIR POSTAGEM
+          </Link>
+          <button
+            type="button"
+            onClick={() => setMinimized(true)}
+            className="border border-fuchsia-300 bg-[#120225]/90 px-3 py-1 text-xs font-extrabold text-fuchsia-100"
+          >
+            MINIMIZAR
+          </button>
+          <button
+            type="button"
+            onClick={() => setActive(null)}
+            className="border border-cyan-200 bg-[#120225]/90 px-3 py-1 text-xs font-extrabold text-cyan-100"
+          >
+            FECHAR
+          </button>
+        </div>
+        {active.kind === "video" ? (
+          <video
+            src={active.src}
+            controls
+            autoPlay
+            className="max-h-[78vh] w-full bg-black object-contain"
+          />
+        ) : (
+          <img
+            src={active.src}
+            alt={active.alt}
+            className="max-h-[78vh] w-full object-contain"
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+export function CommunityCard() {
+  const community = trpc.social.community.useQuery();
+  if (community.isLoading || !community.data)
+    return (
+      <aside className="neon-card corner-cut relative p-5">
+        <p className="display-y2k text-xl text-cyan-100">CONECTADOS</p>
+        <p className="mt-3 text-xs text-slate-400">
+          Sincronizando comunidade...
+        </p>
+      </aside>
+    );
+  return (
+    <aside className="neon-card corner-cut relative p-5">
+      <p className="display-y2k text-xl text-cyan-100">CONECTADOS</p>
+      <p className="mt-1 text-xs text-slate-400">
+        Novos rostos e quem está no campus.
+      </p>
+      <div className="mt-4">
+        <p className="text-[10px] font-bold uppercase text-fuchsia-200">
+          Online agora · {community.data.online.length}
+        </p>
+        <div className="mt-2 flex -space-x-2">
+          {community.data.online.map(person => (
+            <Link
+              key={person.id}
+              href={`/u/${person.username}`}
+              className="relative"
+            >
+              <MemberAvatar
+                member={person as BriarMember}
+                className="h-8 w-8 rounded-full border-2 border-[#190038]"
+              />
+              <PresenceDot
+                status={(person as BriarMember).profileStatus}
+                className="bottom-0 right-0 h-2.5 w-2.5"
+              />
+            </Link>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 border-t border-cyan-300/15 pt-3">
+        <p className="text-[10px] font-bold uppercase text-fuchsia-200">
+          Chegaram agora
+        </p>
+        <div className="mt-2 space-y-2">
+          {community.data.newest.slice(0, 3).map(person => (
+            <Link
+              key={person.id}
+              href={`/u/${person.username}`}
+              className="flex items-center gap-2 text-xs text-slate-200 hover:text-cyan-100"
+            >
+              <MemberAvatar
+                member={person as BriarMember}
+                className="h-7 w-7 rounded-full"
+              />
+              <span className="truncate">{person.name || "Membro Briar"}</span>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+export function ProfileJukebox({
+  target,
+  viewer,
+}: {
+  target: BriarMember;
+  viewer: BriarMember | null;
+}) {
+  const lists = trpc.jukebox.list.useQuery(
+    { username: target.username || "briar" },
+    { enabled: Boolean(target.username) }
+  );
+  const utils = trpc.useUtils();
+  const [playlistTitle, setPlaylistTitle] = useState("");
+  const [track, setTrack] = useState({
+    playlistId: 0,
+    youtubeUrl: "",
+    title: "",
+  });
+  const create = trpc.jukebox.create.useMutation({
+    onSuccess: () => {
+      setPlaylistTitle("");
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Playlist criada na sua jukebox.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const add = trpc.jukebox.addTrack.useMutation({
+    onSuccess: () => {
+      setTrack({ playlistId: 0, youtubeUrl: "", title: "" });
+      utils.jukebox.list.invalidate({ username: target.username || "briar" });
+      toast.success("Faixa adicionada à jukebox.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const connection = trpc.connections.status.useQuery(
+    { username: target.username || "briar" },
+    { enabled: Boolean(viewer && target.username && viewer.id !== target.id) }
+  );
+  const canAdd =
+    viewer?.id === target.id || connection.data?.status === "accepted";
+  const first = lists.data?.[0];
+  return (
+    <section className="neon-card corner-cut relative mt-7 p-5">
+      <p className="display-y2k text-2xl text-fuchsia-200">JUKEBOX BRIAR</p>
+      <p className="mt-1 text-xs text-slate-300">
+        Playlists curtas do perfil. Conexões podem adicionar uma faixa por link
+        do YouTube.
+      </p>
+      {viewer?.id === target.id && (
+        <form
+          onSubmit={event => {
+            event.preventDefault();
+            if (playlistTitle.trim()) create.mutate({ title: playlistTitle });
+          }}
+          className="mt-4 flex gap-2"
+        >
+          <input
+            value={playlistTitle}
+            onChange={event => setPlaylistTitle(event.target.value)}
+            className="y2k-input py-2 text-sm"
+            maxLength={60}
+            placeholder="Nome da playlist"
+          />
+          <button className="neon-button px-3 text-xs font-bold">CRIAR</button>
+        </form>
+      )}
+      {lists.data?.map(list => (
+        <div
+          key={list.id}
+          className="mt-4 border border-cyan-300/20 bg-black/20 p-3"
+        >
+          <p className="text-xs font-extrabold uppercase text-cyan-100">
+            {list.title}
+          </p>
+          {list.tracks.length ? (
+            <div className="mt-2 space-y-2">
+              {list.tracks.slice(0, 8).map(trackItem => (
+                <a
+                  key={trackItem.id}
+                  href={trackItem.youtubeUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block border-l-2 border-fuchsia-300 px-2 py-1 text-xs text-slate-100 hover:text-cyan-100"
+                >
+                  ▶ {trackItem.title}{" "}
+                  <span className="text-slate-400">
+                    · {trackItem.addedBy.name || "conexão"}
+                  </span>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-400">
+              A playlist ainda não tem faixas.
+            </p>
+          )}
+        </div>
+      ))}
+      {canAdd && first && (
+        <form
+          onSubmit={event => {
+            event.preventDefault();
+            if (track.youtubeUrl && track.title)
+              add.mutate({
+                playlistId: track.playlistId || first.id,
+                youtubeUrl: track.youtubeUrl,
+                title: track.title,
+              });
+          }}
+          className="mt-4 space-y-2 border-t border-cyan-300/20 pt-3"
+        >
+          <select
+            value={track.playlistId || first.id}
+            onChange={event =>
+              setTrack(previous => ({
+                ...previous,
+                playlistId: Number(event.target.value),
+              }))
+            }
+            className="y2k-input py-2 text-xs"
+          >
+            {lists.data?.map(list => (
+              <option key={list.id} value={list.id}>
+                {list.title}
+              </option>
+            ))}
+          </select>
+          <input
+            value={track.title}
+            onChange={event =>
+              setTrack(previous => ({ ...previous, title: event.target.value }))
+            }
+            className="y2k-input py-2 text-sm"
+            maxLength={120}
+            placeholder="Título da música"
+          />
+          <input
+            value={track.youtubeUrl}
+            onChange={event =>
+              setTrack(previous => ({
+                ...previous,
+                youtubeUrl: event.target.value,
+              }))
+            }
+            className="y2k-input py-2 text-sm"
+            type="url"
+            placeholder="Link do YouTube"
+          />
+          <button
+            disabled={add.isPending}
+            className="violet-button px-3 py-2 text-xs font-bold uppercase"
+          >
+            Adicionar à jukebox
+          </button>
+        </form>
+      )}
+      {viewer && !canAdd && first && (
+        <p className="mt-4 text-xs text-fuchsia-200">
+          Conecte-se a este perfil para sugerir músicas.
+        </p>
+      )}
+      {!lists.data?.length && viewer?.id !== target.id && (
+        <p className="mt-4 text-xs text-slate-400">
+          Este perfil ainda não criou uma playlist.
+        </p>
+      )}
+    </section>
+  );
+}
+
+export function ProfileQuickInteractions({ target }: { target: BriarMember }) {
+  const { data: member } = trpc.auth.me.useQuery();
+  const [body, setBody] = useState("");
+  const [anonymous, setAnonymous] = useState(false);
+  const [open, setOpen] = useState(false);
+  const utils = trpc.useUtils();
+  const ownProfile = member?.id === target.id;
+  const connection = trpc.connections.status.useQuery(
+    { username: target.username || "briar" },
+    { enabled: Boolean(member && target.username && !ownProfile) }
+  );
+  const refreshConnection = () =>
+    utils.connections.status.invalidate({
+      username: target.username || "briar",
+    });
+  const connect = trpc.connections.request.useMutation({
+    onSuccess: () => {
+      refreshConnection();
+      toast.success("Pedido de conexão enviado.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const disconnect = trpc.connections.remove.useMutation({
+    onSuccess: () => {
+      refreshConnection();
+      toast.success("Conexão removida.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const poke = trpc.notifications.poke.useMutation({
+    onSuccess: () => toast.success(`Você cutucou @${target.username}!`),
+    onError: error => toast.error(error.message),
+  });
+  const note = trpc.notifications.sendNote.useMutation({
+    onSuccess: () => {
+      toast.success("Recado entregue na caixa de correio.");
+      setBody("");
+      setOpen(false);
+    },
+    onError: error => toast.error(error.message),
+  });
+  if (!target.username) return null;
+  const signin = () => window.location.assign("/?auth=1");
+  return (
+    <>
+      <ProfileJukebox
+        target={target}
+        viewer={(member || null) as BriarMember | null}
+      />
+      {!ownProfile && (
+        <aside className="fixed bottom-20 right-3 z-30 w-64 md:bottom-6 md:right-6">
+          <div className="border border-fuchsia-300/55 bg-[#16012d]/95 p-3 shadow-[0_0_24px_rgba(157,0,255,.38)] backdrop-blur">
+            {connection.data?.status === "accepted" ? (
+              <button
+                onClick={() =>
+                  member && disconnect.mutate({ userId: target.id })
+                }
+                disabled={disconnect.isPending}
+                className="mb-2 flex w-full items-center justify-center gap-2 border border-fuchsia-300/55 bg-fuchsia-400/10 py-2 text-xs font-extrabold uppercase text-fuchsia-100"
+              >
+                {disconnect.isPending ? "Removendo..." : "× Desfazer conexão"}
+              </button>
+            ) : (
+              <button
+                onClick={() =>
+                  member
+                    ? connect.mutate({ username: target.username! })
+                    : signin()
+                }
+                disabled={
+                  connect.isPending || connection.data?.status === "pending"
+                }
+                className="mb-2 flex w-full items-center justify-center gap-2 border border-cyan-300/55 bg-cyan-300/10 py-2 text-xs font-extrabold uppercase text-cyan-100"
+              >
+                {connection.data?.status === "pending"
+                  ? "Pedido enviado"
+                  : "+ Conectar"}
+              </button>
+            )}
+            <button
+              onClick={() =>
+                member ? poke.mutate({ username: target.username! }) : signin()
+              }
+              disabled={poke.isPending}
+              className="neon-button corner-cut flex w-full items-center justify-center gap-2 py-3 text-xs font-extrabold uppercase"
+            >
+              <Zap size={15} />⚡ Cutucar!
+            </button>
+            <button
+              onClick={() => (member ? setOpen(!open) : signin())}
+              className="mt-2 flex w-full items-center justify-center gap-2 border border-cyan-300/45 px-3 py-2 text-xs font-bold uppercase text-cyan-100"
+            >
+              <Mail size={15} />
+              Deixar recado
+            </button>
+            {open && (
+              <form
+                onSubmit={event => {
+                  event.preventDefault();
+                  if (body.trim())
+                    note.mutate({
+                      username: target.username!,
+                      body,
+                      isAnonymous: anonymous,
+                    });
+                }}
+                className="mt-3 space-y-2 border-t border-cyan-300/20 pt-3"
+              >
+                <textarea
+                  value={body}
+                  onChange={event => setBody(event.target.value)}
+                  className="y2k-input min-h-20 text-sm"
+                  maxLength={500}
+                  placeholder="Aviso, fofoca ou recado..."
+                />
+                <label className="flex items-center gap-2 text-[11px] text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={anonymous}
+                    onChange={event => setAnonymous(event.target.checked)}
+                  />
+                  Enviar anonimamente
+                </label>
+                <button
+                  disabled={note.isPending || !body.trim()}
+                  className="violet-button flex w-full items-center justify-center gap-2 py-2 text-xs font-extrabold uppercase"
+                >
+                  <Send size={14} />
+                  Enviar
+                </button>
+              </form>
+            )}
+          </div>
+        </aside>
+      )}
+    </>
+  );
+}
+
+export function PersonaComposer({
+  member,
+  onClose,
+}: {
+  member: BriarMember;
+  onClose: () => void;
+}) {
+  const [body, setBody] = useState("");
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<"image" | "video" | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [identity, setIdentity] = useState<IdentityMode>("member");
+  const [postVisibility, setPostVisibility] = useState<"public" | "connections" | "private">("public");
+  const [personaId, setPersonaId] = useState<number | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState({
+    name: "",
+    username: "",
+    avatarUrl: "",
+    isPublic: true,
+  });
+  const utils = trpc.useUtils();
+  const personas = trpc.personas.list.useQuery();
+  const upload = trpc.media.createUploadUrl.useMutation();
+  const create = trpc.social.createPost.useMutation({
+    onSuccess: () => {
+      utils.social.feedPage.invalidate();
+      utils.notifications.unread.invalidate();
+      toast.success("Sua atualização entrou no feed.");
+      onClose();
+    },
+    onError: error => toast.error(error.message),
+  });
+  const addPersona = trpc.personas.create.useMutation({
+    onSuccess: result => {
+      utils.personas.list.invalidate();
+      setPersonaId(result.id);
+      setIdentity("persona");
+      setCreating(false);
+      toast.success("Persona criada e perfil público disponível.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const visibility = trpc.personas.setVisibility.useMutation({
+    onSuccess: () => {
+      utils.personas.list.invalidate();
+      toast.success("Visibilidade da persona atualizada.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const selected = personas.data?.find(persona => persona.id === personaId);
+  const media = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const result = await uploadBriarMedia(file, "post", upload.mutateAsync);
+      setMediaUrl(result.url);
+      setMediaType(file.type.startsWith("video/") ? "video" : "image");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Falha no upload.");
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-[#070012]/80 p-4 backdrop-blur-sm">
+      <form
+        onSubmit={event => {
+          event.preventDefault();
+          create.mutate({
+            body,
+            imageUrl: mediaUrl,
+            mediaType,
+            personaId: identity === "persona" ? personaId : null,
+            audienceIdentity: identity,
+            visibility: postVisibility,
+          });
+        }}
+        className="neon-card corner-cut relative max-h-[90vh] w-full max-w-xl overflow-y-auto p-6"
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 text-slate-300"
+        >
+          <X size={20} />
+        </button>
+        <p className="display-y2k text-3xl text-cyan-100">NOVA ATUALIZAÇÃO</p>
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          {(["member", "persona", "anonymous"] as IdentityMode[]).map(mode => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setIdentity(mode)}
+              className={`border p-2 text-[10px] font-bold uppercase ${identity === mode ? "border-cyan-200 bg-cyan-300/15 text-cyan-100" : "border-white/15 text-slate-300"}`}
+            >
+              {mode === "member"
+                ? "Meu perfil"
+                : mode === "persona"
+                  ? "Persona"
+                  : "Anônimo"}
+            </button>
+          ))}
+        </div>
+        <label className="mt-4 block text-xs font-bold uppercase tracking-wider text-cyan-100">
+          Quem pode ver esta publicação?
+          <select value={postVisibility} onChange={event => setPostVisibility(event.target.value as "public" | "connections" | "private")} className="y2k-input mt-1">
+            <option value="public">Público · aparece aberto no feed</option>
+            <option value="connections">Só conexões · prévia reservada para o público</option>
+            <option value="private">Só eu · prévia reservada para todos</option>
+          </select>
+        </label>
+        {identity === "persona" && (
+          <div className="mt-3 border border-fuchsia-300/30 p-3">
+            <select
+              value={personaId || ""}
+              onChange={event =>
+                setPersonaId(Number(event.target.value) || null)
+              }
+              className="y2k-input"
+            >
+              <option value="">Escolher persona</option>
+              {personas.data?.map(persona => (
+                <option key={persona.id} value={persona.id}>
+                  @{persona.username} · {persona.name}
+                  {persona.isPublic ? " · pública" : " · privada"}
+                </option>
+              ))}
+            </select>
+            {selected && (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/persona/${selected.username}`}
+                  className="text-xs font-bold uppercase text-cyan-100"
+                >
+                  Abrir perfil público ↗
+                </Link>
+                <button
+                  type="button"
+                  onClick={() =>
+                    visibility.mutate({
+                      personaId: selected.id,
+                      isPublic: !selected.isPublic,
+                    })
+                  }
+                  className="text-xs font-bold uppercase text-fuchsia-200"
+                >
+                  Tornar {selected.isPublic ? "privada" : "pública"}
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setCreating(!creating)}
+              className="mt-3 text-xs font-bold uppercase text-fuchsia-200"
+            >
+              {creating ? "Cancelar" : "+ Criar persona"}
+            </button>
+            {creating && (
+              <div className="mt-2 grid gap-2">
+                <input
+                  className="y2k-input"
+                  required
+                  value={draft.name}
+                  onChange={event =>
+                    setDraft(previous => ({
+                      ...previous,
+                      name: event.target.value,
+                    }))
+                  }
+                  placeholder="Nome da persona"
+                />
+                <input
+                  className="y2k-input"
+                  required
+                  value={draft.username}
+                  onChange={event =>
+                    setDraft(previous => ({
+                      ...previous,
+                      username: event.target.value
+                        .toLowerCase()
+                        .replace(/[^a-z0-9_]/g, ""),
+                    }))
+                  }
+                  placeholder="usuario_persona"
+                />
+                <input
+                  className="y2k-input"
+                  type="url"
+                  value={draft.avatarUrl}
+                  onChange={event =>
+                    setDraft(previous => ({
+                      ...previous,
+                      avatarUrl: event.target.value,
+                    }))
+                  }
+                  placeholder="URL da foto (opcional)"
+                />
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={draft.isPublic}
+                    onChange={event =>
+                      setDraft(previous => ({
+                        ...previous,
+                        isPublic: event.target.checked,
+                      }))
+                    }
+                  />
+                  Criar perfil público compartilhável
+                </label>
+                <button
+                  type="button"
+                  disabled={
+                    addPersona.isPending || !draft.name || !draft.username
+                  }
+                  onClick={() =>
+                    addPersona.mutate({
+                      ...draft,
+                      avatarUrl: draft.avatarUrl || null,
+                    })
+                  }
+                  className="violet-button py-2 text-xs font-bold uppercase"
+                >
+                  <CirclePlus size={14} />
+                  Criar persona
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        <div className="mt-4 flex items-center gap-3">
+          <MemberAvatar
+            member={
+              selected
+                ? {
+                    ...member,
+                    name: selected.name,
+                    avatarUrl: selected.avatarUrl,
+                  }
+                : member
+            }
+            className="h-10 w-10 border border-fuchsia-400"
+          />
+          <div>
+            <p className="font-bold text-cyan-100">
+              {identity === "anonymous"
+                ? "Anônimo"
+                : selected?.name || member.name}
+            </p>
+            <p className="text-xs text-slate-400">
+              {identity === "anonymous"
+                ? "Sua identidade real é protegida"
+                : `@${selected?.username || member.username}`}
+            </p>
+          </div>
+        </div>
+        <textarea
+          autoFocus
+          maxLength={2000}
+          className="y2k-input mt-5 min-h-32"
+          value={body}
+          onChange={event => setBody(event.target.value)}
+          placeholder="O que está rolando no campus?"
+        />
+        {mediaUrl && (
+          <div className="relative mt-3">
+            {mediaType === "video" ? (
+              <video src={mediaUrl} controls className="max-h-56 w-full" />
+            ) : (
+              <img
+                src={mediaUrl}
+                alt="Prévia"
+                className="max-h-56 w-full object-cover"
+              />
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setMediaUrl(null);
+                setMediaType(null);
+              }}
+              className="absolute right-2 top-2 border border-cyan-200 bg-[#0d0221]/80 p-1 text-cyan-100"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <label className="flex items-center gap-2 text-xs font-bold uppercase text-fuchsia-200">
+            <ImagePlus size={18} />
+            {uploading ? "Enviando" : "Anexar mídia"}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"
+              className="hidden"
+              onChange={media}
+            />
+          </label>
+          <button
+            disabled={
+              create.isPending ||
+              uploading ||
+              (!body.trim() && !mediaUrl) ||
+              (identity === "persona" && !personaId)
+            }
+            className="neon-button corner-cut flex items-center gap-2 px-4 py-2 text-xs font-extrabold uppercase disabled:opacity-50"
+          >
+            {identity === "anonymous" ? (
+              <EyeOff size={15} />
+            ) : (
+              <Send size={15} />
+            )}
+            Publicar
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+export function NotificationPage() {
+  const { data: member } = trpc.auth.me.useQuery();
+  const utils = trpc.useUtils();
+  const notices = trpc.notifications.list.useQuery(undefined, {
+    enabled: Boolean(member),
+  });
+  const dismiss = trpc.notifications.dismiss.useMutation({
+    onSuccess: () => {
+      utils.notifications.unread.invalidate();
+      utils.notifications.list.invalidate();
+    },
+  });
+  const accept = trpc.connections.accept.useMutation({
+    onSuccess: () => {
+      utils.notifications.unread.invalidate();
+      utils.notifications.list.invalidate();
+      toast.success("Conexão aceita.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const label = (type: string) =>
+    type === "poke"
+      ? "⚡ Cutucada recebida"
+      : type === "note"
+        ? "✉ Recado recebido"
+        : type === "like"
+          ? "♥ Nova curtida"
+          : type === "comment"
+            ? "✦ Novo comentário"
+            : "✦ Pedido de conexão";
+  if (!member)
+    return (
+      <main className="page-shell grid min-h-screen place-items-center p-5">
+        <section className="neon-card corner-cut relative max-w-md p-7 text-center">
+          <p className="display-y2k text-3xl text-cyan-100">NOTIFICAÇÕES</p>
+          <Link
+            href="/?auth=1"
+            className="neon-button mt-5 inline-block px-4 py-2 text-xs font-bold uppercase"
+          >
+            Entrar
+          </Link>
+        </section>
+      </main>
+    );
+  return (
+    <main className="page-shell min-h-screen p-5">
+      <div className="mx-auto max-w-2xl">
+        <Link href="/" className="text-xs font-bold uppercase text-cyan-100">
+          ← Feed Briar
+        </Link>
+        <section className="neon-card corner-cut relative mt-5 p-6">
+          <p className="display-y2k text-3xl text-cyan-100">
+            <BellRing className="mr-2 inline" />
+            NOTIFICAÇÕES
+          </p>
+          <div className="mt-5 space-y-3">
+            {notices.data?.length ? (
+              notices.data.map(notice => (
+                <article
+                  key={notice.id}
+                  className="border border-cyan-300/20 bg-black/20 p-4"
+                >
+                  <p className="text-sm font-bold text-fuchsia-200">
+                    {label(notice.type)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-100">
+                    {notice.isAnonymous === "yes"
+                      ? "Anônimo"
+                      : notice.sender?.name || "Membro Briar"}
+                    {notice.type === "poke"
+                      ? " te cutucou."
+                      : ` ${notice.body || "interagiu com você."}`}
+                  </p>
+                  {notice.postId && (
+                    <Link
+                      href={`/post/${notice.postId}`}
+                      className="mt-3 inline-block text-xs font-bold uppercase text-cyan-100"
+                    >
+                      Abrir publicação
+                    </Link>
+                  )}
+                  {notice.type === "connection" &&
+                    notice.sender &&
+                    !notice.readAt &&
+                    notice.body?.includes("quer") && (
+                      <button
+                        onClick={() =>
+                          accept.mutate({ userId: notice.sender!.id })
+                        }
+                        className="violet-button ml-3 px-3 py-1 text-xs font-bold uppercase"
+                      >
+                        Aceitar
+                      </button>
+                    )}
+                  {!notice.readAt && (
+                    <button
+                      onClick={() =>
+                        dismiss.mutate({ notificationId: notice.id })
+                      }
+                      className="ml-3 mt-3 border border-cyan-300/40 px-3 py-1 text-xs font-bold uppercase text-cyan-100"
+                    >
+                      Marcar como lida
+                    </button>
+                  )}
+                </article>
+              ))
+            ) : (
+              <p className="text-sm text-slate-300">
+                Você não tem interações novas.
+              </p>
+            )}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
